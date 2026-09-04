@@ -3,10 +3,7 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { Database } from "@/types/supabase";
 
-/**
- * Creates the browser Supabase client only when it is actually needed.
- * This keeps build/prerender phases independent from local environment setup.
- */
+/** Creates the browser Supabase client only when it is actually needed. */
 export function createClientSupabase() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -19,15 +16,11 @@ export function createClientSupabase() {
 
   return createBrowserClient<Database>(supabaseUrl, supabaseKey, {
     realtime: {
-      params: {
-        eventsPerSecond: 10,
-      },
+      params: { eventsPerSecond: 10 },
       heartbeatIntervalMs: 30000,
       reconnectAfterMs: (tries: number) => Math.min(tries * 1000, 10000),
     },
-    db: {
-      schema: "public",
-    },
+    db: { schema: "public" },
     auth: {
       autoRefreshToken: true,
       persistSession: true,
@@ -36,10 +29,7 @@ export function createClientSupabase() {
   });
 }
 
-/**
- * Backwards-compatible singleton-style export for existing consumers.
- * It is created lazily through the same validated factory.
- */
+/** Backwards-compatible lazy singleton-style proxy. */
 export const supabase = new Proxy({} as ReturnType<typeof createClientSupabase>, {
   get(_target, property, receiver) {
     const client = createClientSupabase();
@@ -48,13 +38,17 @@ export const supabase = new Proxy({} as ReturnType<typeof createClientSupabase>,
   },
 });
 
-export const supabaseAuth = new Proxy(supabase.auth, {
-  get(_target, property, receiver) {
-    const auth = createClientSupabase().auth;
-    const value = Reflect.get(auth, property, receiver);
-    return typeof value === "function" ? value.bind(auth) : value;
-  },
-});
+/** Lazy auth proxy. Do not access supabase.auth during module evaluation. */
+export const supabaseAuth = new Proxy(
+  {} as ReturnType<typeof createClientSupabase>["auth"],
+  {
+    get(_target, property, receiver) {
+      const auth = createClientSupabase().auth;
+      const value = Reflect.get(auth, property, receiver);
+      return typeof value === "function" ? value.bind(auth) : value;
+    },
+  }
+);
 
 export async function getAuthenticatedUser() {
   const client = createClientSupabase();
