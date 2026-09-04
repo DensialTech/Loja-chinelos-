@@ -1,3 +1,16 @@
+export interface ProductVariantType {
+  id: string;
+  product_id: string;
+  sku?: string | null;
+  size?: string | null;
+  color?: string | null;
+  price?: number | null;
+  stock: number;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface ProductType {
   product_id: string;
   title: string;
@@ -9,17 +22,20 @@ export interface ProductType {
   category_id?: number;
   created_at?: string;
   updated_at?: string;
+  variants?: ProductVariantType[];
 }
 
 export interface CartItemType {
   id: number;
   cart_id: number;
   product_id: string;
+  variant_id?: string | null;
   quantity: number;
   price: number;
   created_at: string;
   updated_at: string;
   product?: ProductType;
+  variant?: ProductVariantType;
 }
 
 export type CartStatus = "active" | "abandoned" | "converted";
@@ -41,19 +57,12 @@ export interface OrderItemType {
   quantity: number;
   price: number;
   product_id: string;
-  product?: {
-    product_id: string;
-    title: string;
-    image?: string;
-  };
+  variant_id?: string | null;
+  product?: { product_id: string; title: string; image?: string };
+  variant?: ProductVariantType;
 }
 
-export type OrderStatus =
-  | "pending"
-  | "processing"
-  | "shipped"
-  | "delivered"
-  | "cancelled";
+export type OrderStatus = "pending" | "processing" | "shipped" | "delivered" | "cancelled";
 
 export interface OrderType {
   id: number;
