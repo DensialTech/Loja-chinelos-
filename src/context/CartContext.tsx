@@ -1,28 +1,25 @@
 'use client';
-import {
-  createContext,
-  useContext,
-  ReactNode,
-  useState,
-  useEffect,
-} from 'react';
-import { ProductType } from '../types';
+
+import { createContext, useContext, ReactNode, useEffect, useMemo, useState } from 'react';
+import { ProductType, ProductVariantType } from '@/types';
 import * as cartService from '@/services/cart/cartService';
 import { toast } from 'sonner';
 import { useAuth } from './AuthContext';
 
-// Define CartItem interface extending ProductType with quantity for UI consumption
+const STORAGE_KEY = 'densial-cart-v1';
+
 export interface CartItem extends ProductType {
   quantity: number;
-  cart_item_id?: number; // Database ID for the cart item
+  cart_item_id?: number;
+  variant?: ProductVariantType;
 }
 
 interface CartContextType {
   cartItems: CartItem[];
-  addToCart: (product: ProductType) => void;
-  removeFromCart: (productId: string) => void;
-  updateQuantity: (productId: string, amount: number) => void;
-  clearCart: () => void;
+  addToCart: (product: ProductType, variant?: ProductVariantType) => Promise<void>;
+  removeFromCart: (productId: string, variantId?: string) => Promise<void>;
+  updateQuantity: (productId: string, amount: number, variantId?: string) => Promise<void>;
+  clearCart: () => Promise<void>;
   totalItems: number;
   subtotal: number;
   isLoading: boolean;
@@ -30,227 +27,151 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
+function itemKey(productId: string, variantId?: string | null) {
+  return `${productId}:${variantId ?? 'base'}`;
+}
+
+function calculateTotals(items: CartItem[]) {
+  return {
+    subtotal: items.reduce((sum, item) => sum + (item.variant?.price ?? item.price) * item.quantity, 0),
+    totalItems: items.reduce((sum, item) => sum + item.quantity, 0),
+  };
+}
+
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [subtotal, setSubtotal] = useState(0);
-  const [totalItems, setTotalItems] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [activeCartId, setActiveCartId] = useState<number | null>(null);
   const { user } = useAuth();
 
-  // Load cart from database when user changes
   useEffect(() => {
+    let cancelled = false;
     async function loadCart() {
-      if (!user) {
-        // Clear cart if user is not logged in
-        setCartItems([]);
-        setSubtotal(0);
-        setTotalItems(0);
-        setActiveCartId(null);
-        setIsLoading(false);
-        return;
-      }
-
       setIsLoading(true);
       try {
-        // Get or create active cart
-        const cart = await cartService.getOrCreateCart();
-        if (cart) {
-          setActiveCartId(cart.id);
+        if (typeof window !== 'undefined') {
+          const raw = window.localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw) as CartItem[];
+            if (!cancelled && Array.isArray(parsed)) setCartItems(parsed);
+          }
+        }
 
-          // Get cart items
-          const items = await cartService.getCartItems(cart.id);
-
-          // Transform to CartItem format
-          const formattedItems: CartItem[] = items.map((item) => ({
-            ...item.product,
-            quantity: item.quantity,
-            cart_item_id: item.id,
-          }));
-
-          setCartItems(formattedItems);
-          setSubtotal(cart.total_price);
-          setTotalItems(cart.total_items);
+        if (user) {
+          const cart = await cartService.getOrCreateCart();
+          if (cart) {
+            const items = await cartService.getCartItems(cart.id);
+            const formattedItems: CartItem[] = items.map((item) => ({
+              ...item.product,
+              quantity: item.quantity,
+              cart_item_id: item.id,
+              variant: item.variant,
+            }));
+            if (!cancelled) {
+              setActiveCartId(cart.id);
+              setCartItems(formattedItems);
+            }
+          }
         }
       } catch (error) {
-        console.error('Error loading cart:', error);
-        toast.error('Failed to load your cart');
+        console.error('Erro ao carregar carrinho:', error);
+        toast.error('Não foi possível carregar o carrinho.');
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     }
-
     loadCart();
+    return () => { cancelled = true; };
   }, [user]);
 
-  // Calculate totals when cartItems change
   useEffect(() => {
-    if (!isLoading) {
-      const total = cartItems.reduce(
-        (acc, item) => acc + item.price * item.quantity,
-        0
-      );
-      setSubtotal(total);
-
-      const itemCount = cartItems.reduce((acc, item) => acc + item.quantity, 0);
-      setTotalItems(itemCount);
+    if (typeof window !== 'undefined' && !isLoading) {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cartItems));
     }
   }, [cartItems, isLoading]);
 
-  const addToCart = async (product: ProductType) => {
-    if (!user) {
-      toast.error('Please login to add items to cart');
+  const totals = useMemo(() => calculateTotals(cartItems), [cartItems]);
+
+  const addToCart = async (product: ProductType, variant?: ProductVariantType) => {
+    const stock = variant?.stock ?? product.stock;
+    if (stock <= 0) {
+      toast.error('Este item está esgotado.');
       return;
     }
 
-    if (!activeCartId) {
-      const cart = await cartService.createCart();
-      if (!cart) {
-        toast.error('Failed to create cart');
-        return;
-      }
-      setActiveCartId(cart.id);
+    const key = itemKey(product.product_id, variant?.id);
+    const existing = cartItems.find((item) => itemKey(item.product_id, item.variant?.id) === key);
+    if (existing && existing.quantity >= stock) {
+      toast.error('Quantidade máxima disponível em estoque.');
+      return;
     }
 
-    try {
-      // Add item to database
-      const result = await cartService.addItemToCart(
-        activeCartId as number,
-        product.product_id,
-        product.price,
-        1
-      );
-
-      if (result) {
-        // Find the item in current cart items
-        const existingItemIndex = cartItems.findIndex(
-          (item) => item.product_id === product.product_id
-        );
-
-        if (existingItemIndex !== -1) {
-          // Update existing item
-          const updatedItems = [...cartItems];
-          updatedItems[existingItemIndex] = {
-            ...updatedItems[existingItemIndex],
-            quantity: updatedItems[existingItemIndex].quantity + 1,
-            cart_item_id: result.id,
-          };
-          setCartItems(updatedItems);
-        } else {
-          // Add new item
-          setCartItems([
-            ...cartItems,
-            { ...product, quantity: 1, cart_item_id: result.id },
-          ]);
+    if (user) {
+      try {
+        let cartId = activeCartId;
+        if (!cartId) {
+          const cart = await cartService.createCart();
+          cartId = cart?.id ?? null;
+          if (cartId) setActiveCartId(cartId);
         }
-
-        toast.success('Added to cart');
+        if (cartId) {
+          const result = await cartService.addItemToCart(cartId, product.product_id, variant?.price ?? product.price, 1);
+          if (result) {
+            setCartItems((prev) => existing
+              ? prev.map((item) => itemKey(item.product_id, item.variant?.id) === key ? { ...item, quantity: item.quantity + 1, cart_item_id: result.id } : item)
+              : [...prev, { ...product, quantity: 1, cart_item_id: result.id, variant }]
+            );
+            toast.success('Adicionado ao carrinho.');
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('Erro ao salvar carrinho:', error);
       }
-    } catch (error) {
-      console.error('Error adding to cart:', error);
-      toast.error('Failed to add item to cart');
     }
+
+    setCartItems((prev) => existing
+      ? prev.map((item) => itemKey(item.product_id, item.variant?.id) === key ? { ...item, quantity: item.quantity + 1 } : item)
+      : [...prev, { ...product, quantity: 1, variant }]
+    );
+    toast.success('Adicionado ao carrinho.');
   };
 
-  const removeFromCart = async (productId: string) => {
-    if (!activeCartId) return;
-
-    try {
-      // Find the cart item
-      const itemToRemove = cartItems.find(
-        (item) => item.product_id === productId
-      );
-
-      if (itemToRemove?.cart_item_id) {
-        // Remove from database
-        const success = await cartService.removeCartItem(
-          itemToRemove.cart_item_id
-        );
-
-        if (success) {
-          // Remove from local state
-          setCartItems((prev) =>
-            prev.filter((item) => item.product_id !== productId)
-          );
-          toast.success('Item removed from cart');
-        }
-      }
-    } catch (error) {
-      console.error('Error removing from cart:', error);
-      toast.error('Failed to remove item from cart');
+  const removeFromCart = async (productId: string, variantId?: string) => {
+    const item = cartItems.find((entry) => itemKey(entry.product_id, entry.variant?.id) === itemKey(productId, variantId));
+    if (item?.cart_item_id) {
+      try { await cartService.removeCartItem(item.cart_item_id); } catch (error) { console.error(error); }
     }
+    setCartItems((prev) => prev.filter((entry) => itemKey(entry.product_id, entry.variant?.id) !== itemKey(productId, variantId)));
   };
 
-  const updateQuantity = async (productId: string, amount: number) => {
-    if (!activeCartId) return;
-
-    try {
-      // Find the item in cart
-      const itemToUpdate = cartItems.find(
-        (item) => item.product_id === productId
-      );
-
-      if (!itemToUpdate || !itemToUpdate.cart_item_id) return;
-
-      const newQuantity = itemToUpdate.quantity + amount;
-
-      if (newQuantity <= 0) {
-        // If new quantity is zero or less, remove the item
-        await removeFromCart(productId);
-        return;
-      }
-
-      // Update in database
-      const result = await cartService.updateCartItemQuantity(
-        itemToUpdate.cart_item_id,
-        newQuantity
-      );
-
-      if (result) {
-        // Update in local state
-        setCartItems((prev) =>
-          prev.map((item) =>
-            item.product_id === productId
-              ? { ...item, quantity: newQuantity }
-              : item
-          )
-        );
-      }
-    } catch (error) {
-      console.error('Error updating quantity:', error);
-      toast.error('Failed to update quantity');
+  const updateQuantity = async (productId: string, amount: number, variantId?: string) => {
+    const key = itemKey(productId, variantId);
+    const item = cartItems.find((entry) => itemKey(entry.product_id, entry.variant?.id) === key);
+    if (!item) return;
+    const newQuantity = item.quantity + amount;
+    if (newQuantity <= 0) return removeFromCart(productId, variantId);
+    const stock = item.variant?.stock ?? item.stock;
+    if (newQuantity > stock) {
+      toast.error('Quantidade máxima disponível em estoque.');
+      return;
     }
+    if (item.cart_item_id) {
+      try { await cartService.updateCartItemQuantity(item.cart_item_id, newQuantity); } catch (error) { console.error(error); }
+    }
+    setCartItems((prev) => prev.map((entry) => itemKey(entry.product_id, entry.variant?.id) === key ? { ...entry, quantity: newQuantity } : entry));
   };
 
   const clearCart = async () => {
-    if (!activeCartId) return;
-
-    try {
-      const success = await cartService.clearCart(activeCartId);
-
-      if (success) {
-        setCartItems([]);
-        toast.success('Cart cleared');
-      }
-    } catch (error) {
-      console.error('Error clearing cart:', error);
-      toast.error('Failed to clear cart');
+    if (activeCartId) {
+      try { await cartService.clearCart(activeCartId); } catch (error) { console.error(error); }
     }
+    setCartItems([]);
+    toast.success('Carrinho esvaziado.');
   };
 
   return (
-    <CartContext.Provider
-      value={{
-        cartItems,
-        addToCart,
-        removeFromCart,
-        updateQuantity,
-        clearCart,
-        totalItems,
-        subtotal,
-        isLoading,
-      }}
-    >
+    <CartContext.Provider value={{ ...totals, cartItems, addToCart, removeFromCart, updateQuantity, clearCart, isLoading }}>
       {children}
     </CartContext.Provider>
   );
@@ -258,8 +179,6 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
 export function useCart() {
   const context = useContext(CartContext);
-  if (context === undefined) {
-    throw new Error('useCart must be used within a CartProvider');
-  }
+  if (!context) throw new Error('useCart must be used within a CartProvider');
   return context;
 }
