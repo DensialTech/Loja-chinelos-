@@ -16,43 +16,34 @@ import { cn } from "@/lib/utils";
 const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(
-    process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
-  ),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
   title: {
     default: "Loja de Chinelos",
     template: "%s | Loja de Chinelos",
   },
-  description:
-    "Compre chinelos com praticidade, segurança e entrega para sua região.",
+  description: "Compre chinelos com praticidade, segurança e pagamento online.",
   applicationName: "Loja de Chinelos",
-  robots: {
-    index: true,
-    follow: true,
+  keywords: ["chinelos", "sandálias", "calçados", "loja de chinelos"],
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: "website",
+    locale: "pt_BR",
+    title: "Loja de Chinelos",
+    description: "Encontre seu próximo par de chinelos.",
+    siteName: "Loja de Chinelos",
   },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="pt-BR" suppressHydrationWarning className={cn("font-sans", geist.variable)}>
-      <head>
-        <link rel="icon" href="/icon.svg" />
-      </head>
+      <head><link rel="icon" href="/icon.svg" /></head>
       <body className="min-h-screen bg-background">
         <ErrorBoundary>
           <TanStackQueryProvider>
             <AuthProvider>
               <CartProvider>
-                <ThemeProvider
-                  attribute="class"
-                  defaultTheme="system"
-                  enableSystem
-                  disableTransitionOnChange
-                >
+                <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
                   <SidebarProvider>
                     <Sidebar />
                     <SidebarInset>
@@ -65,7 +56,7 @@ export default function RootLayout({
             </AuthProvider>
           </TanStackQueryProvider>
         </ErrorBoundary>
-        <Toaster theme="light" />
+        <Toaster theme="light" richColors position="top-right" />
       </body>
     </html>
   );
